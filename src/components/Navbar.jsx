@@ -1,24 +1,93 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 
-export default function Navbar() {
+function Navbar() {
   return (
-    <nav className="w-full bg-[#6E4A3E] text-white py-4 shadow-md">
-      <div className="max-w-7xl mx-auto flex items-center justify-between px-6">
-        <h1 className="text-2xl font-extrabold tracking-wide">TasteFind</h1>
+    <nav className="bg-[#6E4A3E] text-white px-6 py-4 flex items-center justify-between relative">
+      
+      {/* LOGO — KIRI ATAS */}
+      <h1
+        className="text-2xl font-semibold font-serif"
+      >
+        <NavLink to="/">TasteFind</NavLink>
+      </h1>
 
-        <ul className="flex gap-8 text-sm font-medium">
-          <li><Link to="/berita" className="hover:text-[#DEB3A3]">News</Link></li>
-          <li><Link to="/resepsehat" className="hover:text-[#DEB3A3]">Healthy Recipes</Link></li>
-          <li><Link to="/makanan" className="hover:text-[#DEB3A3]">Food</Link></li>
-          <li><Link to="/minuman" className="hover:text-[#DEB3A3]">Drink</Link></li>
-          <li><Link to="/all" className="hover:text-[#DEB3A3]">All</Link></li>
-        </ul>
-
-        <button className="px-4 py-2 bg-[#DEB3A3] text-[#6E4A3E] rounded-lg hover:bg-[#cfa293]">
-          Search
-        </button>
-      </div>
+      {/* NAV LINKS — TENGAH */}
+      <ul className="flex gap-6 text-base md:text-lg font-sans absolute left-1/2 transform -translate-x-1/2">
+        <li>
+          <NavLink
+            to="/"
+            className={({ isActive }) =>
+              isActive
+                ? "border-b-2 border-white pb-1"
+                : "pb-1 hover:border-b-2 hover:border-white transition-all"
+            }
+          >
+            Beranda
+          </NavLink>
+        </li>
+        <li>
+          <NavLink
+            to="/berita"
+            className={({ isActive }) =>
+              isActive
+                ? "border-b-2 border-white pb-1"
+                : "pb-1 hover:border-b-2 hover:border-white transition-all"
+            }
+          >
+            Berita
+          </NavLink>
+        </li>
+        <li>
+          <NavLink
+            to="/resep-sehat"
+            className={({ isActive }) =>
+              isActive
+                ? "border-b-2 border-white pb-1"
+                : "pb-1 hover:border-b-2 hover:border-white transition-all"
+            }
+          >
+            Resep Sehat
+          </NavLink>
+        </li>
+        <li>
+          <NavLink
+            to="/makanan"
+            className={({ isActive }) =>
+              isActive
+                ? "border-b-2 border-white pb-1"
+                : "pb-1 hover:border-b-2 hover:border-white transition-all"
+            }
+          >
+            Makanan
+          </NavLink>
+        </li>
+        <li>
+          <NavLink
+            to="/minuman"
+            className={({ isActive }) =>
+              isActive
+                ? "border-b-2 border-white pb-1"
+                : "pb-1 hover:border-b-2 hover:border-white transition-all"
+            }
+          >
+            Minuman
+          </NavLink>
+        </li>
+        <li>
+          <NavLink
+            to="/all"
+            className={({ isActive }) =>
+              isActive
+                ? "border-b-2 border-white pb-1"
+                : "pb-1 hover:border-b-2 hover:border-white transition-all"
+            }
+          >
+            Semua
+          </NavLink>
+        </li>
+      </ul>
     </nav>
   );
 }
+
+export default Navbar;
