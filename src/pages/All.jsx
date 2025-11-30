@@ -28,7 +28,7 @@ export default function All() {
           style={{ fontFamily: 'Georgia, serif', animationDelay: "0.5s" }}
         >
           Dari resep makanan, minuman, hidangan sehat, hingga berita kuliner terbaru.  
-          <span className="text-[#F1D8AA] font-semibold">Jelajahi semuanya dengan mudah.</span>
+          <span className="text-[#F1D8AA] font-semibold"> Jelajahi semuanya dengan mudah.</span>
         </p>
 
         {/* SEARCH BOX */}

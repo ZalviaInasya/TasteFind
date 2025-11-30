@@ -24,7 +24,9 @@ export default function App() {
             <Route path="/berita" element={<Berita />} />
             <Route path="/makanan" element={<Makanan />} />
             <Route path="/minuman" element={<Minuman />} />
-            <Route path="/resepsehat" element={<ResepSehat />} />
+
+            {/* Tambahan: path baru biar /resep-sehat tidak error */}
+            <Route path="/resep-sehat" element={<ResepSehat />} />
           </Routes>
         </div>
 
