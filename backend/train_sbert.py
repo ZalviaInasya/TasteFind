@@ -13,22 +13,31 @@ def load_original_text(cat):
     """
     Load original text (BUKAN tokens) untuk SBERT embeddings.
     SBERT memerlukan natural language text, bukan tokenized text.
+    PENTING: Concatenate Judul + Isi agar semantic context lengkap!
     """
-    json_path = f"backend/dataset/{cat}.json"
+    json_path = f"backend/metadata/{cat}.json"
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     
-    # Extract original content text (tidak menggunakan tokens_joined)
+    # Extract original content dengan CONCATENATION Judul + Isi
     docs = []
     for item in data:
-        # Priority: Isi Berita > Isi Resep > fallback ke judul
+        # Get judul
+        judul = item.get("Judul") or item.get("Judul Resep", "")
+        
+        # Get isi
         if "Isi Berita" in item and item["Isi Berita"]:
-            text = item["Isi Berita"]
+            isi = item["Isi Berita"]
         elif "Isi Resep" in item and item["Isi Resep"]:
-            text = item["Isi Resep"]
+            isi = item["Isi Resep"]
         else:
-            # Fallback ke judul
-            text = item.get("Judul") or item.get("Judul Resep", "")
+            isi = ""
+        
+        # CONCATENATE: "[Judul] [Isi]" untuk semantic lengkap
+        text = f"{judul} {isi}".strip()
+        
+        if not text:
+            text = "unknown"
         
         docs.append(text)
     
