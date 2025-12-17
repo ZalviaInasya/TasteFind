@@ -2,9 +2,23 @@ import json
 import os
 import time
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+
+# Optional heavy imports (graceful fallback)
+try:
+    from sentence_transformers import SentenceTransformer
+    _SBERT_AVAILABLE = True
+except Exception:
+    SentenceTransformer = None
+    _SBERT_AVAILABLE = False
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    _SKLEARN_AVAILABLE = True
+except Exception:
+    TfidfVectorizer = None
+    cosine_similarity = None
+    _SKLEARN_AVAILABLE = False
 
 
 # Utility: load JSON dataset
@@ -78,108 +92,125 @@ class Evaluator:
                 text = "unknown"
             self.corpus.append(text)
 
-        # Prepare vectorizers
+        # Prepare vectorizers (require sklearn)
+        if not _SKLEARN_AVAILABLE:
+            raise RuntimeError("scikit-learn is required for TF-IDF; install scikit-learn to enable evaluation")
+
         self.tfidf = TfidfVectorizer()
         self.tfidf_vectors = self.tfidf.fit_transform(self.corpus)
 
         # SBERT model and vectors are heavy — create lazily on demand
         self._sbert_model = None
         self._sbert_vectors = None
+        self._sbert_available = _SBERT_AVAILABLE
 
-    def _build_ground_truth_for_query(self, query):
+    def _build_ground_truth_for_query(self, query, pool_indices):
         """
-        Build ground truth DINAMIS untuk query tertentu.
-        Ini memastikan setiap query punya relevant docs yang berbeda.
+        Build REALISTIC ground truth:
+        relevance ditentukan oleh konten dokumen,
+        BUKAN oleh ranking algorithm
         """
-        query_lower = query.lower()
-        doc_scores = []
-        
-        # Score setiap dokumen berdasarkan keyword match dengan query
-        for idx, doc in enumerate(self.corpus):
-            doc_lower = doc.lower()
-            score = 0
-            
-            # Split query into keywords dan score match
-            keywords = [kw for kw in query_lower.split() if len(kw) > 2]  # exclude short words
-            
-            for kw in keywords:
-                # Direct keyword match
-                count = doc_lower.count(kw)
-                score += count * 2
-                
-                # Phrase match (if query is multi-word)
-                if query_lower in doc_lower:
-                    score += 10  # High boost untuk exact phrase match
-            
-            if score > 0:
-                doc_scores.append((idx, score))
-        
-        # Sort by score dan ambil top-20
-        doc_scores.sort(key=lambda x: x[1], reverse=True)
-        relevant_indices = [idx for idx, score in doc_scores[:20]]
-        
-        return relevant_indices
+        query_l = query.lower()
+        q_terms = [t for t in query_l.split() if len(t) > 2]
+
+        relevant = []
+
+        for idx in pool_indices:
+            doc = self.corpus[idx].lower()
+
+            title_hit = 0
+            body_hit = 0
+
+            for t in q_terms:
+                if t in doc:
+                    body_hit += 1
+
+            # Heuristik relevance (realistic)
+            if body_hit >= len(q_terms):
+                relevant.append(idx)
+            elif body_hit >= 1:
+                relevant.append(idx)
+
+        return relevant
 
     def evaluate_query(self, query, algorithms=("tfidf", "sbert"), top_k=20):
-        """
-        Evaluate specific query dengan dynamic ground truth.
-        Ini memberikan hasil evaluasi yang UNIK untuk setiap query.
-        """
-        # Build ground truth untuk query ini
-        relevant_docs = self._build_ground_truth_for_query(query)
-        
+
+        pool = set()
+
+        # Measure runtime for each ranking algorithm when computing the ranks
+        start = time.perf_counter()
+        tfidf_rank = self._rank_tfidf_cosine(query, top_k=top_k)
+        tfidf_runtime_ms = (time.perf_counter() - start) * 1000
+        pool.update(tfidf_rank)
+
+        sbert_rank = []
+        sbert_runtime_ms = 0.0
+        if self._sbert_available:
+            start = time.perf_counter()
+            sbert_rank = self._rank_cosine_sbert(query, top_k=top_k)
+            sbert_runtime_ms = (time.perf_counter() - start) * 1000
+            pool.update(sbert_rank)
+
+        pool = list(pool)
+
+        # Ground truth berdasarkan SELURUH KORPUS (agar relevant_count benar-benar representatif)
+        relevant_docs = self._build_ground_truth_for_query(query, range(len(self.corpus)))
+
         if len(relevant_docs) == 0:
-            # Query tidak match dengan dokumen apapun
             return {
                 "query": query,
                 "metrics": {
-                    "tfidf": {
-                        "precision": 0.0,
-                        "recall": 0.0,
-                        "f1": 0.0,
-                        "ap": 0.0,
-                        "ranked_indices": []
-                    },
-                    "sbert": {
-                        "precision": 0.0,
-                        "recall": 0.0,
-                        "f1": 0.0,
-                        "ap": 0.0,
-                        "ranked_indices": []
-                    }
+                    algo: {"precision": 0, "recall": 0, "f1": 0, "ap": 0, "map": 0}
+                    for algo in algorithms
                 }
             }
-        
+
         result = {"query": query, "metrics": {}}
-        
+
         for algo in algorithms:
             if algo == "tfidf":
-                ranked = self._rank_tfidf_cosine(query, top_k=top_k)
+                ranked = tfidf_rank
+                runtime_ms = tfidf_runtime_ms
             elif algo == "sbert":
-                ranked = self._rank_cosine_sbert(query, top_k=top_k)
+                ranked = sbert_rank if self._sbert_available else []
+                runtime_ms = sbert_runtime_ms if self._sbert_available else 0.0
             else:
-                raise ValueError(f"Unknown algorithm: {algo}")
-            
+                raise ValueError(algo)
+
             p = precision(relevant_docs, ranked)
             r = recall(relevant_docs, ranked)
             f = f1(p, r)
             ap = average_precision(relevant_docs, ranked)
-            
+
             result["metrics"][algo] = {
-                "precision": float(p),
-                "recall": float(r),
-                "f1": float(f),
-                "ap": float(ap),
-                "ranked_indices": ranked
+                "precision": p,
+                "recall": r,
+                "f1": f,
+                "ap": ap,
+                "map": ap,
+                "runtime_ms": runtime_ms,
+                "runtime_s": runtime_ms / 1000.0,
+                "relevant_count": len(relevant_docs),
+                "retrieved_count": len(ranked),
+                "intersection_count": len(set(relevant_docs) & set(ranked)),
+                "relevant_ids": sorted(relevant_docs),
+                "retrieved_ids": list(ranked)
             }
-        
+
         return result
 
+
     def _ensure_sbert(self):
+        if not self._sbert_available:
+            raise RuntimeError("SBERT model not available (sentence-transformers package missing)")
         if self._sbert_model is None or self._sbert_vectors is None:
             # load model and encode corpus
-            self._sbert_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-            self._sbert_vectors = self._sbert_model.encode(self.corpus, convert_to_numpy=True)
+            try:
+                self._sbert_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+                self._sbert_vectors = self._sbert_model.encode(self.corpus, convert_to_numpy=True)
+            except Exception as e:
+                self._sbert_available = False
+                raise
 
     def _rank_tfidf_cosine(self, query, top_k=20):
         q_vec = self.tfidf.transform([query])
@@ -194,6 +225,47 @@ class Evaluator:
         sim = cosine_similarity([q_vec], self._sbert_vectors)[0]
         ranked = np.argsort(sim)[::-1][:top_k]
         return ranked.tolist()
+
+    def evaluate(self, sample_size=50, top_k=20):
+        """Aggregate evaluation over a sample of queries to build a quick overview report."""
+        # build candidate queries using frequent terms in the corpus
+        token_counts = {}
+        for doc in self.corpus:
+            for tok in doc.split():
+                tok = tok.strip().lower()
+                if len(tok) <= 3:
+                    continue
+                token_counts[tok] = token_counts.get(tok, 0) + 1
+
+        # pick most frequent tokens as query candidates
+        candidates = sorted(token_counts.items(), key=lambda x: x[1], reverse=True)
+        queries = [tok for tok, _ in candidates[: max(sample_size, 10) ]] if candidates else ["makanan"]
+
+        agg = {"tfidf": {"precision": [], "recall": [], "f1": [], "map": [], "runtime_ms": []},
+               "sbert": {"precision": [], "recall": [], "f1": [], "map": [], "runtime_ms": []}}
+
+        for q in queries[:sample_size]:
+            res = self.evaluate_query(q, algorithms=("tfidf", "sbert"), top_k=top_k)
+            for algo in ("tfidf", "sbert"):
+                m = res["metrics"].get(algo, {})
+                agg[algo]["precision"].append(m.get("precision", 0.0))
+                agg[algo]["recall"].append(m.get("recall", 0.0))
+                agg[algo]["f1"].append(m.get("f1", 0.0))
+                agg[algo]["map"].append(m.get("ap", 0.0))
+                agg[algo]["runtime_ms"].append(m.get("runtime_ms", 0.0))
+
+        report = {"metrics": {}}
+        for algo in ("tfidf", "sbert"):
+            vals = agg[algo]
+            report["metrics"][algo] = {
+                "precision": float(sum(vals["precision"]) / max(1, len(vals["precision"]))),
+                "recall": float(sum(vals["recall"]) / max(1, len(vals["recall"]))),
+                "f1": float(sum(vals["f1"]) / max(1, len(vals["f1"]))),
+                "map": float(sum(vals["map"]) / max(1, len(vals["map"]))),
+                "runtime_ms": float(sum(vals["runtime_ms"]) / max(1, len(vals["runtime_ms"])))
+            }
+
+        return report
 
 
 if __name__ == "__main__":

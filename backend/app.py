@@ -10,13 +10,21 @@ CORS(app)
 
 # Cache evaluation results in memory at startup (takes ~40 seconds once)
 EVAL_CACHE = None
+EVALUATOR = None
+
+
+def get_evaluator():
+    global EVALUATOR
+    if EVALUATOR is None:
+        EVALUATOR = Evaluator()
+    return EVALUATOR
 
 def init_eval_cache():
     """Initialize evaluation cache at app startup"""
     global EVAL_CACHE
     print("[INFO] Pre-computing evaluation metrics (this takes ~40 seconds)...")
     try:
-        evaluator = Evaluator()
+        evaluator = get_evaluator()
         report = evaluator.evaluate()
         
         # Round metrics for display
@@ -82,6 +90,44 @@ def evaluate_endpoint():
     if EVAL_CACHE is None:
         return jsonify({"error": "Evaluation cache not ready"}), 503
     return jsonify(EVAL_CACHE), 200
+
+
+@app.route("/evaluate/query", methods=["POST"])
+def evaluate_query_endpoint():
+    """Evaluate a single query dynamically and return per-algo metrics"""
+    try:
+        data = request.json or {}
+        query = data.get("query", "")
+        top_k = int(data.get("top_k", 20))
+
+        if not query:
+            return jsonify({"error": "Query is required"}), 400
+
+        evaluator = get_evaluator()
+        result = evaluator.evaluate_query(query, algorithms=("tfidf", "sbert"), top_k=top_k)
+
+        # Round some numbers for concise display
+        for algo, m in result.get("metrics", {}).items():
+            if "runtime_ms" in m:
+                m["runtime_ms"] = round(m["runtime_ms"], 4)
+            if "precision" in m:
+                m["precision"] = round(m["precision"], 8)
+            if "recall" in m:
+                m["recall"] = round(m["recall"], 8)
+            if "f1" in m:
+                m["f1"] = round(m["f1"], 8)
+            # Round both per-query AP and alias 'map' if present
+            if "ap" in m:
+                m["ap"] = round(m["ap"], 8)
+            if "map" in m:
+                m["map"] = round(m["map"], 8)
+
+        return jsonify(result), 200
+    except Exception as e:
+        print(f"[ERROR] evaluate_query failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     init_eval_cache()

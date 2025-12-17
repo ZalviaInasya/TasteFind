@@ -16,6 +16,8 @@ export default function Minuman() {
     setLoading(true);
     setError("");
     setHasSearched(true);
+    // record last search query so Eval modal can auto-run
+    try { localStorage.setItem("tastefind:last_search", searchValue); } catch (e) {}
 
     try {
       const response = await fetch("http://localhost:5000/search", {
@@ -36,6 +38,23 @@ export default function Minuman() {
 
       const data = await response.json();
       setResults(data.results || []);
+
+      fetch("http://localhost:5000/evaluate/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: searchValue, top_k: 20 }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((evalRes) => {
+          if (evalRes) {
+            try {
+              localStorage.setItem("tastefind:last_eval", JSON.stringify({ query: searchValue, result: evalRes, ts: Date.now() }));
+            } catch (e) {
+              console.warn("Failed to cache eval:", e);
+            }
+          }
+        })
+        .catch(() => {});
     } catch (err) {
       console.error("Search error:", err);
       setError(`Terjadi kesalahan: ${err.message}`);
@@ -53,6 +72,16 @@ export default function Minuman() {
     return [...results].sort((a, b) => (b.sbert_score || 0) - (a.sbert_score || 0)).slice(0, 5);
   };
 
+  const getHybridResults = () => {
+    return [...results]
+      .sort((a, b) => {
+        const as = a.hybrid_score ?? ((a.tfidf_score || 0) + (a.sbert_score || 0)) / 2;
+        const bs = b.hybrid_score ?? ((b.tfidf_score || 0) + (b.sbert_score || 0)) / 2;
+        return bs - as;
+      })
+      .slice(0, 5);
+  };
+
   const formatDate = (raw) => {
     if (!raw) return "N/A";
     try {
@@ -65,6 +94,8 @@ export default function Minuman() {
     if (match) return match[1];
     return raw.length > 30 ? raw.substring(0, 30) + "..." : raw;
   };
+
+  const [scoreType, setScoreType] = useState("hybrid");
 
   const getDescription = (item, maxLen = 120) => {
     const text = (item["Isi Berita"] || item["Isi Resep"] || "").trim();
@@ -222,129 +253,119 @@ export default function Minuman() {
         {/* HASIL CONTAINER - SIDE BY SIDE */}
         {!loading && (
           <div className="w-full max-w-7xl">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* TF-IDF SECTION */}
-              <div className="backdrop-blur-lg bg-white/[0.02] border border-white/20 rounded-2xl p-8 shadow-lg hover:bg-white/[0.05] transition-all opacity-0 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
-                <h2 className="text-2xl font-semibold text-white mb-6 drop-shadow-lg" style={{ fontFamily: "Poppins, serif" }}>
-                  TF-IDF Results
-                </h2>
-                {getTFIDFResults().length > 0 ? (
-                  <div className="space-y-6">
-                    {getTFIDFResults().map((item, idx) => (
-                      <div
-                        key={`tfidf-${idx}`}
-                        className="bg-white/[0.03] backdrop-blur-lg border border-white/15 rounded-xl shadow-md hover:shadow-lg hover:bg-white/[0.08] transition-all group h-40 flex flex-col"
-                      >
-                        <div className="flex flex-col sm:flex-row items-start gap-3 p-3 flex-1 overflow-hidden">
-                          {/* IMAGE WITH ROUNDED WRAPPER */}
-                          <div className="w-full sm:w-32 h-32 flex-shrink-0 rounded-lg overflow-hidden bg-white/5">
-                            <img
-                              src={item["URL Gambar"] || "/images/placeholder.jpg"}
-                              alt={item["Judul"] || "Item"}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                              onError={(e) => {
-                                e.target.src = "/images/placeholder.jpg";
-                              }}
-                            />
-                          </div>
-                          
-                          {/* CONTENT */}
-                          <div className="flex-1 flex flex-col justify-between min-w-0">
-                            <div>
-                              <h3 className="font-semibold text-white mb-1 line-clamp-2 drop-shadow text-left text-sm">
-                                {item["Judul"] || item["Judul Resep"] || "N/A"}
-                              </h3>
-                              <p className="text-xs text-white/70 mb-1 text-left">
-                                {formatDate(item["Tanggal"]) }
-                              </p>
-                              <p className="text-xs text-white/80 text-left line-clamp-2">
-                                {getDescription(item, 100)}
-                              </p>
-                            </div>
-                            <div className="flex justify-between items-center pt-2 gap-2">
-                              <span className="text-xs bg-blue-400/30 backdrop-blur-sm border border-blue-300/50 text-white px-2 py-1 rounded-full font-semibold whitespace-nowrap">
-                                tf-idf: {(item["tfidf_score"] || 0).toFixed(3)}
-                              </span>
-                              <a
-                                href={item["URL Link"] || "#"}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="bg-amber-800/40 hover:bg-amber-700/50 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-all drop-shadow whitespace-nowrap border border-amber-600/30"
-                              >
-                                Selengkapnya
-                              </a>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-white/80">Tidak ada hasil untuk TF-IDF</p>
-                )}
+              <div className="flex items-center gap-3 justify-center mb-4">
+                <button
+                  onClick={() => setScoreType("hybrid")}
+                  className={`px-4 py-2 rounded-full font-semibold text-sm transition-all ${scoreType === "hybrid" ? "bg-[#6E4A3E] text-white" : "bg-white/6 text-white/80"}`}
+                >
+                  Hybrid
+                </button>
+                <button
+                  onClick={() => setScoreType("tfidf")}
+                  className={`px-4 py-2 rounded-full font-semibold text-sm transition-all ${scoreType === "tfidf" ? "bg-[#6E4A3E] text-white" : "bg-white/6 text-white/80"}`}
+                >
+                  TF-IDF
+                </button>
+                <button
+                  onClick={() => setScoreType("sbert")}
+                  className={`px-4 py-2 rounded-full font-semibold text-sm transition-all ${scoreType === "sbert" ? "bg-[#6E4A3E] text-white" : "bg-white/6 text-white/80"}`}
+                >
+                  SBERT
+                </button>
               </div>
 
-              {/* SBERT SECTION */}
-              <div className="backdrop-blur-lg bg-white/[0.02] border border-white/20 rounded-2xl p-8 shadow-lg hover:bg-white/[0.05] transition-all opacity-0 animate-fade-in-up" style={{ animationDelay: "0.4s" }}>
+              {/* RESULTS LIST */}
+              <div className="backdrop-blur-lg bg-white/[0.02] border border-white/20 rounded-2xl p-8 shadow-lg hover:bg-white/[0.05] transition-all opacity-0 animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
                 <h2 className="text-2xl font-semibold text-white mb-6 drop-shadow-lg" style={{ fontFamily: "Poppins, serif" }}>
-                  SBERT Results
+                  {scoreType === "tfidf" ? "TF-IDF" : scoreType === "sbert" ? "SBERT" : "HYBRID"}
                 </h2>
-                {getSBERTResults().length > 0 ? (
+                {(
+                  scoreType === "tfidf" ? getTFIDFResults() : scoreType === "sbert" ? getSBERTResults() : getHybridResults()
+                ).length > 0 ? (
                   <div className="space-y-6">
-                    {getSBERTResults().map((item, idx) => (
+                    {(
+                      scoreType === "tfidf" ? getTFIDFResults() : scoreType === "sbert" ? getSBERTResults() : getHybridResults()
+                    ).map((item, idx) => (
                       <div
-                        key={`sbert-${idx}`}
-                        className="bg-white/[0.03] backdrop-blur-lg border border-white/15 rounded-xl shadow-md hover:shadow-lg hover:bg-white/[0.08] transition-all group h-40 flex flex-col"
+                        key={`res-${scoreType}-${idx}`}
+                        className="relative bg-white/[0.03] backdrop-blur-lg border border-white/15 rounded-xl shadow-md hover:shadow-lg hover:bg-white/[0.08] transition-all group min-h-[17rem] flex flex-col"
                       >
-                        <div className="flex flex-col sm:flex-row items-start gap-3 p-3 flex-1 overflow-hidden">
+                        <div className="flex flex-col sm:flex-row items-start gap-4 p-4 pb-4 flex-1 h-full overflow-hidden">
                           {/* IMAGE WITH ROUNDED WRAPPER */}
-                          <div className="w-full sm:w-32 h-32 flex-shrink-0 rounded-lg overflow-hidden bg-white/5">
+                          <div className="w-full sm:w-64 h-64 flex-shrink-0 rounded-lg overflow-hidden bg-white/5">
                             <img
                               src={item["URL Gambar"] || "/images/placeholder.jpg"}
-                              alt={item["Judul"] || "Item"}
+                              alt={item["Judul"] || item["Judul Resep"] || "Item"}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                               onError={(e) => {
                                 e.target.src = "/images/placeholder.jpg";
                               }}
                             />
                           </div>
-                          
+
+
+
                           {/* CONTENT */}
-                          <div className="flex-1 flex flex-col justify-between min-w-0">
-                            <div>
-                              <h3 className="font-semibold text-white mb-1 line-clamp-2 drop-shadow text-left text-sm">
+                          <div className="flex-1 flex flex-col min-w-0 sm:h-64">
+                            <div className="mb-3">
+                              <h3 className="font-semibold text-white mb-3 line-clamp-2 drop-shadow text-left text-xl md:text-2xl">
                                 {item["Judul"] || item["Judul Resep"] || "N/A"}
                               </h3>
-                              <p className="text-xs text-white/70 mb-1 text-left">
+                              <p className="text-xs md:text-sm text-white/70 mb-2 text-left">
                                 {formatDate(item["Tanggal"]) }
                               </p>
-                              <p className="text-xs text-white/80 text-left line-clamp-2">
-                                {getDescription(item, 100)}
+                              <p className="text-sm md:text-base text-white/80 text-left line-clamp-3 mb-3">
+                                {getDescription(item, 180)}
                               </p>
                             </div>
-                            <div className="flex justify-between items-center pt-2 gap-2">
-                              <span className="text-xs bg-green-400/30 backdrop-blur-sm border border-green-300/50 text-white px-2 py-1 rounded-full font-semibold whitespace-nowrap">
-                                sbert: {(item["sbert_score"] || 0).toFixed(3)}
-                              </span>
-                              <a
-                                href={item["URL Link"] || "#"}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="bg-amber-800/40 hover:bg-amber-700/50 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-all drop-shadow whitespace-nowrap border border-amber-600/30"
-                              >
-                                Selengkapnya
-                              </a>
-                            </div>
+
+                              <div className="mt-10 md:mt-12 flex items-center gap-4 flex-wrap w-full justify-between">
+                                <div className="flex items-center gap-4 flex-wrap">
+                                  {scoreType === "hybrid" ? (
+                                    <>
+                                      <span className="text-sm md:text-base bg-blue-400/25 backdrop-blur-sm border border-blue-300/40 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
+                                        tf-idf: {(item["tfidf_score"] || 0).toFixed(3)}
+                                      </span>
+                                      <span className="text-sm md:text-base bg-green-400/25 backdrop-blur-sm border border-green-300/40 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
+                                        sbert: {(item["sbert_score"] || 0).toFixed(3)}
+                                      </span>
+                                      <span className="text-sm md:text-base bg-purple-500/25 backdrop-blur-sm border border-purple-400/40 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
+                                        hybrid: {(item["hybrid_score"] ?? (((item["tfidf_score"]||0)+(item["sbert_score"]||0))/2)).toFixed(3)}
+                                      </span>
+                                    </>
+                                  ) : scoreType === "tfidf" ? (
+                                    <span className="text-sm md:text-base bg-blue-400/30 backdrop-blur-sm border border-blue-300/50 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
+                                      tf-idf: {(item["tfidf_score"] || 0).toFixed(3)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-sm md:text-base bg-green-400/30 backdrop-blur-sm border border-green-300/50 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
+                                      sbert: {(item["sbert_score"] || 0).toFixed(3)}
+                                    </span>
+                                  )}
+
+                                  <span className="text-sm md:text-base bg-amber-800/30 backdrop-blur-sm border border-amber-600/30 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap mr-4">
+                                    { (item["category"] || "minuman").toString().toLowerCase() }
+                                  </span>
+                                </div>
+
+                                <a
+                                  href={item["URL Link"] || "#"}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="bg-amber-800/40 hover:bg-amber-700/50 text-white text-sm md:text-base font-semibold px-3 py-1.5 rounded-md transition-all drop-shadow whitespace-nowrap border border-amber-600/30"
+                                >
+                                  Selengkapnya
+                                </a>
+                              </div>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-white/80">Tidak ada hasil untuk SBERT</p>
+                  <p className="text-white/80">Tidak ada hasil</p>
                 )}
               </div>
-            </div>
           </div>
         )}
       </div>

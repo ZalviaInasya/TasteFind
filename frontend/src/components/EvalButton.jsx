@@ -5,27 +5,78 @@ export default function EvalButton() {
   const [loading, setLoading] = useState(false);
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
+  const [query, setQuery] = useState("");
 
   async function openEval() {
     console.log("EVALUASI DIKLIK");
     setOpen(true);
+    setError(null);
+
+    // Load cached eval and last search
+    let cached = null;
+    let lastSearch = null;
+
+    try {
+      const rawCached = localStorage.getItem("tastefind:last_eval");
+      if (rawCached) cached = JSON.parse(rawCached);
+    } catch (e) {
+      console.warn("Failed to parse cached eval", e);
+    }
+
+    try {
+      lastSearch = localStorage.getItem("tastefind:last_search");
+    } catch (e) {}
+
+    // If cached eval matches last search, use it immediately
+    if (cached && cached.query && lastSearch && cached.query === lastSearch) {
+      setQuery(cached.query || "");
+      setReport(cached.result || null);
+      return;
+    }
+
+    // If we have a last search query but no matching cached eval, auto-run evaluation
+    if (lastSearch) {
+      setQuery(lastSearch);
+      // start evaluation and show loading state
+      setReport(null);
+      setLoading(true);
+      try {
+        await runEval(lastSearch);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // Fallback: no cached report and no previous search
+    setReport(null);
+  }
+
+  async function runEval(q) {
+    const qToUse = (typeof q === "string" && q.trim()) ? q.trim() : (query || "");
+    if (!qToUse) {
+      setError("Silakan masukkan query untuk dievaluasi");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("http://localhost:5000/evaluate", {
-          method: "POST",
-          headers: {
-              "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-              query: "ayam goreng", 
-              top_k: 20
-          })
+      const res = await fetch("http://localhost:5000/evaluate/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: qToUse, top_k: 20 }),
       });
-      console.log("STATUS:", res.status);
-      console.log("RAW:", await res.clone().text());
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Status ${res.status}: ${text}`);
+      }
       const data = await res.json();
       setReport(data);
+      setQuery(qToUse);
+      try {
+        localStorage.setItem("tastefind:last_eval", JSON.stringify({ query: qToUse, result: data, ts: Date.now() }));
+        localStorage.setItem("tastefind:last_search", qToUse);
+      } catch (e) {}
     } catch (err) {
       setError(err.message || "Failed to fetch evaluation");
     } finally {
@@ -85,6 +136,25 @@ export default function EvalButton() {
 
                 {/* Content */}
                 <div className="mt-6 min-h-[120px]">
+                  {/* Show query header when we have a cached or running report, otherwise show input */}
+                  {(report || loading || query) ? (
+                    <div className="mb-4">
+                      <div className="rounded-md bg-white/5 border border-white/10 px-4 py-3 flex items-center gap-3">
+                        <span className="text-sm text-white/70">Query:</span>
+                        <span className="font-semibold text-[#F3D9B1]">"{query}"</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-3 mb-4">
+                      <input
+                        className="flex-1 px-3 py-2 rounded-lg bg-white/6 text-white outline-none"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Masukkan query untuk evaluasi atau gunakan hasil pencarian terakhir"
+                      />
+                      <button onClick={() => runEval()} className="px-4 py-2 bg-[#6E4A3E] rounded-lg font-semibold">Jalankan</button>
+                    </div>
+                  )}
                   {loading && (
                     <div className="flex items-center gap-3">
                       <div className="w-4 h-4 rounded-full bg-[#F3D9B1] animate-pulse" />
@@ -102,32 +172,41 @@ export default function EvalButton() {
                       {Object.keys(report.metrics).map((algo) => {
                         const algoName = algo === "tfidf" ? "TF-IDF Cosine Similarity" : "SBERT Cosine Similarity";
                         return (
-                          <div key={algo} className="bg-white/5 border border-white/10 rounded-lg p-4 hover:bg-white/8 transition-colors">
-                            <h3 className="text-base font-semibold text-[#F3D9B1]">{algoName}</h3>
-                            <div className="mt-3 text-sm text-white/70 space-y-2">
-                              <div className="grid grid-cols-2 gap-4">
-                                <div className="flex justify-between">
-                                  <span>Runtime</span>
-                                  <span className="text-white/90 font-medium">{report.metrics[algo].runtime_ms} ms</span>
+                          <div key={algo} className="bg-white/5 border border-white/10 rounded-lg p-3 hover:bg-white/8 transition-colors">
+                            <div className="flex items-start justify-between">
+                            <h3 className="text-xl md:text-2xl font-extrabold text-[#F3D9B1] drop-shadow-sm" style={{ fontFamily: "Poppins, serif" }}>{algoName}</h3>
+                            <div className="text-sm text-white/70 flex items-center gap-2">
+                              {/* small clock icon */}
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="#F3D9B1" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="9" />
+                                <path d="M12 7v6l4 2" />
+                              </svg>
+                              <span className="font-medium text-white/90">{(report.metrics[algo].runtime_ms/1000).toFixed(4)} sec</span>
+                            </div>
+                          </div>
+
+                          <div className="mt-4">
+                            <div className="max-w-[620px] mx-auto text-sm text-white/70">
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                                  <span className="text-base text-[#F3D9B1]">Precision</span>
+                                  <span className="font-semibold text-white/90">{Number(report.metrics[algo].precision || 0).toFixed(8)}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span>Precision</span>
-                                  <span className="text-white/90 font-medium">{report.metrics[algo].precision}</span>
+                                <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                                  <span className="text-base text-[#F3D9B1]">Recall</span>
+                                  <span className="font-semibold text-white/90">{Number(report.metrics[algo].recall || 0).toFixed(8)}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span>Recall</span>
-                                  <span className="text-white/90 font-medium">{report.metrics[algo].recall}</span>
+                                <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                                  <span className="text-base text-[#F3D9B1]">F1-Score</span>
+                                  <span className="font-semibold text-white/90">{Number(report.metrics[algo].f1 || 0).toFixed(8)}</span>
                                 </div>
-                                <div className="flex justify-between">
-                                  <span>f-measure</span>
-                                  <span className="text-white/90 font-medium">{report.metrics[algo].f1}</span>
-                                </div>
-                                <div className="flex justify-between">
-                                  <span>MAP</span>
-                                  <span className="text-white/90 font-medium">{report.metrics[algo].map}</span>
+                                <div className="grid grid-cols-[1fr_auto] items-center gap-2">
+                                  <span className="text-base text-[#F3D9B1]">MAP</span>
+                                  <span className="font-semibold text-white/90">{Number(report.metrics[algo].map || 0).toFixed(8)}</span>
                                 </div>
                               </div>
                             </div>
+                          </div>
                           </div>
                         );
                       })}
