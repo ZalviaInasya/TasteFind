@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import DetailModal from "../components/DetailModal";
 
 export default function BeritaKuliner() {
   const [searchValue, setSearchValue] = useState("");
@@ -96,9 +97,25 @@ export default function BeritaKuliner() {
   };
 
   const [scoreType, setScoreType] = useState("hybrid");
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [showModal, setShowModal] = useState(false);
 
   const getDescription = (item, maxLen = 120) => {
-    const text = (item["Isi Berita"] || item["Isi Resep"] || "").trim();
+    const getText = (val) => {
+      if (!val) return "";
+      if (Array.isArray(val)) return val.join(" ");
+      return String(val);
+    };
+
+    const text = (
+      getText(item["Isi Berita"]) ||
+      getText(item["Isi Resep"]) ||
+      getText(item["deskripsi"]) ||
+      getText(item["Deskripsi"]) ||
+      getText(item["isi"]) ||
+      ""
+    ).trim();
+
     if (!text) return "Tidak ada deskripsi";
     if (text.length <= maxLen) return text;
     return text.substring(0, maxLen) + ".....";
@@ -325,22 +342,22 @@ export default function BeritaKuliner() {
                                   {scoreType === "hybrid" ? (
                                     <>
                                       <span className="text-sm md:text-base bg-blue-400/25 backdrop-blur-sm border border-blue-300/40 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
-                                        tf-idf: {(item["tfidf_score"] || 0).toFixed(3)}
+                                        tf-idf: {(item["tfidf_score"] || 0).toFixed(4)}
                                       </span>
                                       <span className="text-sm md:text-base bg-green-400/25 backdrop-blur-sm border border-green-300/40 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
-                                        sbert: {(item["sbert_score"] || 0).toFixed(3)}
+                                        sbert: {(item["sbert_score"] || 0).toFixed(4)}
                                       </span>
                                       <span className="text-sm md:text-base bg-purple-500/25 backdrop-blur-sm border border-purple-400/40 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
-                                        hybrid: {(item["hybrid_score"] ?? (((item["tfidf_score"]||0)+(item["sbert_score"]||0))/2)).toFixed(3)}
+                                        hybrid: {(item["hybrid_score"] ?? (((item["tfidf_score"]||0)+(item["sbert_score"]||0))/2)).toFixed(4)}
                                       </span>
                                     </>
                                   ) : scoreType === "tfidf" ? (
                                     <span className="text-sm md:text-base bg-blue-400/30 backdrop-blur-sm border border-blue-300/50 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
-                                      tf-idf: {(item["tfidf_score"] || 0).toFixed(3)}
+                                      tf-idf: {(item["tfidf_score"] || 0).toFixed(4)}
                                     </span>
                                   ) : (
                                     <span className="text-sm md:text-base bg-green-400/30 backdrop-blur-sm border border-green-300/50 text-white px-3 py-1.5 rounded-full font-semibold whitespace-nowrap">
-                                      sbert: {(item["sbert_score"] || 0).toFixed(3)}
+                                      sbert: {(item["sbert_score"] || 0).toFixed(4)}
                                     </span>
                                   )}
 
@@ -349,14 +366,12 @@ export default function BeritaKuliner() {
                                   </span>
                                 </div>
 
-                                <a
-                                  href={item["URL Link"] || "#"}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                                <button
+                                  onClick={() => { setSelectedItem(item); setShowModal(true); }}
                                   className="bg-amber-800/40 hover:bg-amber-700/50 text-white text-sm md:text-base font-semibold px-3 py-1.5 rounded-md transition-all drop-shadow whitespace-nowrap border border-amber-600/30"
                                 >
                                   Selengkapnya
-                                </a>
+                                </button>
                               </div>
                           </div>
                         </div>
@@ -371,6 +386,9 @@ export default function BeritaKuliner() {
           </div>
         )}
       </div>
+
+      {/* DETAIL MODAL */}
+      <DetailModal open={showModal} onClose={() => { setShowModal(false); setSelectedItem(null); }} item={selectedItem} />
 
       {/* ANIMATION */}
       <style>

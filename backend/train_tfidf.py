@@ -13,7 +13,7 @@ def simple_tokenizer(text):
 
 def load_json_file(cat):
     """Load JSON file dan extract tokens_joined untuk TF-IDF"""
-    json_path = f"backend/dataset/{cat}.json"
+    json_path = f"tokens/{cat}_tokens.json"
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     
@@ -29,7 +29,7 @@ def load_json_file(cat):
 
 def train_tfidf():
     # Create output directory jika belum ada
-    os.makedirs("backend/tfidf", exist_ok=True)
+    os.makedirs("tfidf", exist_ok=True)
     
     for cat in CATEGORIES:
         print(f"\n{'='*60}")
@@ -52,11 +52,11 @@ def train_tfidf():
         print(f"Vocabulary size: {len(vectorizer.get_feature_names_out())}")
 
         # Simpan vectorizer
-        with open(f"backend/tfidf/{cat}_vectorizer.pkl", "wb") as f:
+        with open(f"tfidf/{cat}_vectorizer.pkl", "wb") as f:
             pickle.dump(vectorizer, f)
 
         # Simpan matrix TF-IDF
-        save_npz(f"backend/tfidf/{cat}_matrix.npz", matrix)
+        save_npz(f"tfidf/{cat}_matrix.npz", matrix)
 
         print(f"✓ Saved TF-IDF model for {cat}")
         print(f"  - Vectorizer: backend/tfidf/{cat}_vectorizer.pkl")

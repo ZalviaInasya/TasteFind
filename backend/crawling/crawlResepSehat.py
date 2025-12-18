@@ -1,371 +1,409 @@
 import requests
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import csv
+import json
 import time
 import re
-
+import os
+import random
 
 class ResepSehatCrawler:
-    def __init__(self):
+    def __init__(self, use_selenium=True):
+        self.use_selenium = use_selenium
+        self.driver = None 
+        
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
         }
-
-    def clean_content(self, text):
-        """Bersihkan konten dari noise dan format dengan baik"""
-        noise_patterns = [
-            r'Baca [Jj]uga:.*?(?=\n|$)',
-            r'ADVERTISEMENT.*?(?=\n|$)',
-            r'Simak [Vv]ideo.*?(?=\n|$)',
-            r'Saksikan [Vv]ideo.*?(?=\n|$)',
-            r'\([A-Z]{2,}/[A-Z]{2,}\)',
-            r'SCROLL TO CONTINUE WITH CONTENT',
-            r'Loading...',
-            r'\[\s*\]',
-            r'\(\s*\)',
+        
+        # Buat folder dataset
+        self.dataset_folder = "dataset"
+        if not os.path.exists(self.dataset_folder):
+            os.makedirs(self.dataset_folder)
+            
+        # Keyword Header
+        self.bahan_header_keywords = [
+            'bahan-bahan', 'bahan:', 'bahan utama', 'resep bahan', 'komposisi',
+            'bahan isian', 'bahan bumbu', 'bahan pelengkap', 'bahan rebusan',
+            'bahan jamu', 'bahan ramuan', 'bahan rempah', 'bahan sayur'
         ]
         
-        for pattern in noise_patterns:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        self.langkah_header_keywords = [
+            'cara membuat', 'cara memasak', 'langkah-langkah', 'langkah pembuatan', 
+            'cara mengolah', 'instruksi', 'urutan', 'cara bikin', 'cara meracik',
+            'cara penyajian', 'cara konsumsi'
+        ]
         
+        # Blacklist Konten Sampah
+        self.content_blacklist = [
+            'baca juga', 'simak video', 'berita foto', 'kunjungi', 'klik tautan',
+            'copyright', 'advertisement', 'promoted', 'shopee', 'tokopedia',
+            'beli di sini', 'promo', 'diskon', 'sumber:', 'penulis:', 'editor:',
+            'kompas.com', 'dapatkan informasi', 'whatsapp', 'telegram',
+            'artikel kompas.id', 'lihat foto', 'buka gambar', 'baca berita',
+            'selanjutnya', 'halaman', 'picu', 'tuduhan', 'malapraktik'
+        ]
+
+        if self.use_selenium:
+            self.setup_selenium()
+
+    def setup_selenium(self):
+        try:
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument(f"user-agent={self.headers['User-Agent']}")
+            chrome_options.add_experimental_option("prefs", {
+                "profile.default_content_setting_values.notifications": 2
+            })
+            self.driver = webdriver.Chrome(options=chrome_options)
+            print("   ✅ Selenium WebDriver initialized")
+        except Exception as e:
+            print(f"   ⚠️  Selenium setup failed: {e}")
+            self.use_selenium = False
+            self.driver = None
+
+    def clean_text(self, text):
+        if not text: return ""
+        text = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
         text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\n\s*\n', '\n\n', text)
-        
         return text.strip()
 
-    def is_recipe_healthy(self, title, content):
-        """Filter resep/tips SEHAT saja - WAJIB ada kata 'sehat' dan keyword kesehatan"""
-        combined = (title + " " + content).lower()
+    def clean_leading_number(self, text):
+        return re.sub(r'^\s*\d+[\.\)\-]\s*', '', text).strip()
+
+    def format_date(self, date_str):
+        try:
+            match = re.search(r'(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})', date_str)
+            if match:
+                day, month, year = match.groups()
+                return f"{day}-{month}-{year}"
+            return date_str
+        except: return date_str
+
+    # --- FILTER SUPER KETAT (MEDIS & DIET) ---
+    def is_strictly_healthy(self, title):
+        t = title.lower()
         
-        # 1. WAJIB: Kata "SEHAT" harus ada
-        if "sehat" not in combined:
-            return False
-        
-        # 2. WAJIB: Minimal salah satu keyword kesehatan/manfaat
-        health_keywords = [
-            # Kata sehat dan variasinya
-            'sehat', 'menyehatkan', 'kesehatan', 'healthy',
+        # 1. JUDUL WAJIB MENGANDUNG SALAH SATU KATA INI (Whitelist)
+        must_have_keywords = [
+            # Kategori Penyakit/Medis
+            'kolesterol', 'diabetes', 'asam urat', 'darah tinggi', 'hipertensi',
+            'jantung', 'flu', 'batuk', 'masuk angin', 'sakit kepala', 'nyeri',
+            'imun', 'daya tahan', 'redakan', 'atasi', 'sembuhkan', 'obat',
             
-            # Diet dan penurunan berat badan
-            'diet', 'menurunkan berat badan', 'langsing', 'kurus', 'slim',
-            'rendah kalori', 'low calori', 'tanpa lemak', 'fat free',
+            # Kategori Diet/Metode Sehat
+            'diet', 'rendah kalori', 'low carb', 'tanpa minyak', 'tanpa santan',
+            'kukus', 'rebus', 'pepes', 'panggang', 'tim', 'bening',
+            'vegetarian', 'vegan', 'sehat', 'detox',
             
-            # Manfaat kesehatan
-            'berkhasiat', 'bermanfaat', 'khasiat', 'manfaat', 'benefit',
-            'bergizi', 'nutrisi', 'gizi seimbang', 'nutritious',
-            
-            # Penyakit dan kesembuhan
-            'kolesterol', 'kolestrol', 'diabetes', 'diabetic', 'gula darah',
-            'darah tinggi', 'hipertensi', 'tekanan darah', 'jantung sehat',
-            'stroke', 'asam urat', 'maag', 'lambung',
-            
-            # Detox dan pembersihan
-            'detox', 'detoksifikasi', 'membersihkan', 'cleansing',
-            'antioksidan', 'antioxidant',
-            
-            # Organik dan alami
-            'organik', 'organic', 'alami', 'natural', 'herbal',
-            
-            # Daya tahan tubuh
-            'imun', 'imunitas', 'daya tahan tubuh', 'immunity',
-            'antibodi', 'vitamin', 'mineral',
-            
-            # Kondisi kesehatan
-            'sembuh', 'penyembuhan', 'healing', 'obat alami',
-            'mengurangi', 'mencegah', 'melawan', 'fight',
-            
-            # Tips kesehatan
-            'tips sehat', 'cara sehat', 'hidup sehat', 'lifestyle sehat',
-            'pola hidup sehat', 'gaya hidup sehat'
+            # Kategori Herbal
+            'jamu', 'wedang', 'ramuan', 'herbal', 'rimpang', 'empon',
+            'jahe', 'kunyit', 'kencur', 'temulawak', 'sereh'
         ]
         
-        has_health_keyword = any(keyword in combined for keyword in health_keywords)
-        
-        if not has_health_keyword:
+        # Jika tidak ada satupun kata sakti di atas -> SKIP
+        if not any(k in t for k in must_have_keywords):
             return False
+            
+        # 2. BLACKLIST METODE TIDAK SEHAT
+        # Tolak jika ada kata "Goreng", "Santan", "Crispy" 
+        # KECUALI ada kata penawar "Tanpa", "Bukan", "Sehat"
+        bad_keywords = ['goreng', 'santan', 'crispy', 'krispi', 'lemak', 'gajih', 'jeroan', 'kulit ayam']
         
-        # 3. EXCLUDE: Resep biasa tanpa konten kesehatan
-        # Jika hanya menyebut nama makanan/minuman tanpa pembahasan sehat
-        if len(content) < 100:
-            return False
-        
-        # Hitung berapa banyak kata kesehatan yang muncul
-        health_count = sum(1 for keyword in health_keywords if keyword in combined)
-        
-        # Minimal ada 2 kata kesehatan berbeda
-        if health_count < 2:
-            return False
-        
-        # 4. WAJIB: Harus ada indikator artikel/resep
-        content_indicators = [
-            'resep', 'cara membuat', 'cara bikin', 'bahan-bahan',
-            'ingredients', 'langkah', 'tips', 'manfaat', 'khasiat',
-            'mengolah', 'sajian', 'hidangan', 'menu', 'ramuan'
-        ]
-        
-        has_content_indicator = any(indicator in combined for indicator in content_indicators)
-        
-        if not has_content_indicator:
-            return False
-        
+        for bad in bad_keywords:
+            if bad in t:
+                # Cek penawar
+                if any(good in t for good in ['tanpa', 'no', 'non', 'rendah', 'sehat', 'diet', 'bukan']):
+                    continue # Lolos (misal: "Ayam Goreng Tanpa Minyak")
+                return False # Ditolak (misal: "Ayam Goreng Crispy")
+
         return True
 
-    # ===== KOMPAS TAG RESEP SEHAT / MAKANAN SEHAT =====
-    def get_links_kompas_sehat(self, max_pages=15):
-        print("\n📰 KOMPAS TAG - Mengambil Link Resep Sehat...")
-        links = []
-        
-        # Gunakan beberapa tag terkait kesehatan
-        tags = ["makanan-sehat", "resep-sehat", "diet-sehat"]
-        
-        for tag in tags:
-            for page in range(1, max_pages + 1):
-                if len(links) >= 120:
-                    break
-                    
-                try:
-                    url = f"https://www.kompas.com/tag/{tag}?page={page}"
-                    print(f"   Scraping [{tag}]: {url}")
-                    response = requests.get(url, headers=self.headers, timeout=15)
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    
-                    for a in soup.find_all("a", href=True):
-                        href = a["href"]
-                        if "kompas.com" in href and "/read/" in href:
-                            if href not in links:
-                                links.append(href)
-                    
-                    print(f"   [{tag}] Hal {page}: Total {len(links)} link")
-                    time.sleep(2)
-                except Exception as e:
-                    print(f"   Error [{tag}] hal {page}: {e}")
-        
-        return links
+    def is_listicle_or_compilation(self, title):
+        t = title.lower()
+        if re.match(r'^\s*[2-9]\d*\s+', t) or re.match(r'^\s*1\d+\s+', t): 
+             return True
+        compilation_words = ['kumpulan', 'daftar', 'rekomendasi', 'aneka', 'variasi', 'serba', 'gerai', 'promo']
+        if any(w in t for w in compilation_words): return True
+        return False
 
-    def scrape_kompas(self, url):
-        try:
-            response = requests.get(url, headers=self.headers, timeout=15)
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            # Title
-            title = ""
-            h1 = soup.find("h1", class_="read__title")
-            if not h1:
-                h1 = soup.find("h1")
-            if h1:
-                title = h1.get_text(strip=True)
-            
-            # Date
-            date = ""
-            date_elem = soup.find("div", class_="read__time")
-            if not date_elem:
-                date_elem = soup.find("time")
-            if date_elem:
-                date = date_elem.get_text(strip=True)
-            
-            # Image
-            image_url = ""
-            og_image = soup.find("meta", property="og:image")
-            if og_image:
-                image_url = og_image.get("content", "")
-            
-            # Content
-            content = ""
-            content_div = soup.find("div", class_="read__content")
-            if content_div:
-                paragraphs = content_div.find_all("p")
-                content_parts = []
-                for p in paragraphs:
-                    text = p.get_text(strip=True)
-                    if len(text) > 20:
-                        content_parts.append(text)
-                content = " ".join(content_parts)
-                content = self.clean_content(content)
-            
-            return {"title": title, "date": date, "content": content, "url": url, "image_url": image_url}
-        except Exception as e:
-            print(f"      Error scraping: {e}")
-            return None
+    def is_header(self, text, keywords):
+        text_lower = text.lower()
+        if len(text) > 50: return False 
+        return any(k in text_lower for k in keywords)
 
-    # ===== TRIBUNNEWS RESEP MASAKAN (FILTER SEHAT) =====
-    def get_links_tribun_resep(self, max_pages=15):
-        print("\n🗞️ TRIBUN RESEP MASAKAN - Mengambil Link...")
-        links = []
-        
-        for page in range(1, max_pages + 1):
-            try:
-                url = f"https://www.tribunnews.com/resep-masakan?page={page}"
-                print(f"   Scraping: {url}")
-                response = requests.get(url, headers=self.headers, timeout=15)
-                soup = BeautifulSoup(response.text, "html.parser")
-                
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-                    if "tribunnews.com" in href and len(href) > 30:
-                        if "/resep-masakan" not in href or "?page=" not in href:
-                            if href not in links and href != url:
-                                links.append(href)
-                
-                print(f"   Halaman {page}: Total {len(links)} link terkumpul")
-                time.sleep(2)
-            except Exception as e:
-                print(f"   Error halaman {page}: {e}")
-        
-        return links
+    def is_step_numbered(self, text):
+        return bool(re.match(r'^\s*\d+[\.\)\-]', text))
 
-    def scrape_tribun(self, url):
-        try:
-            response = requests.get(url, headers=self.headers, timeout=15)
-            soup = BeautifulSoup(response.text, "html.parser")
-            
-            # Title
-            title = ""
-            h1 = soup.find("h1", id="arttitle")
-            if not h1:
-                h1 = soup.find("h1")
-            if h1:
-                title = h1.get_text(strip=True)
-            
-            # Date
-            date = ""
-            time_tag = soup.find("time")
-            if time_tag:
-                date = time_tag.get("datetime", "") or time_tag.get_text(strip=True)
-            
-            # Image
-            image_url = ""
-            og_image = soup.find("meta", property="og:image")
-            if og_image:
-                image_url = og_image.get("content", "")
-            
-            # Content
-            content = ""
-            content_div = soup.find("div", class_="side-article")
-            if not content_div:
-                content_div = soup.find("div", {"id": "article-body"})
-            
-            if content_div:
-                paragraphs = content_div.find_all("p")
-                content_parts = []
-                for p in paragraphs:
-                    text = p.get_text(strip=True)
-                    if len(text) > 20:
-                        content_parts.append(text)
-                content = " ".join(content_parts)
-                content = self.clean_content(content)
-            
-            return {"title": title, "date": date, "content": content, "url": url, "image_url": image_url}
-        except Exception as e:
-            print(f"      Error scraping: {e}")
-            return None
+    def is_valid_ingredient(self, text):
+        """Validasi Bahan: Bersih dari Iklan"""
+        t_lower = text.lower()
+        if any(x in t_lower for x in self.content_blacklist): return False
+        
+        start_blacklist = ['resep', 'cara', 'tips', 'manfaat', 'baca', 'simak', 'lihat', 'artikel', 'news', 'foto', 'video']
+        if any(t_lower.startswith(x + ' ') for x in start_blacklist): return False
+        
+        if '”' in text or '“' in text or '"' in text: return False
+        if "?" in text or "!" in text: return False
+        if len(text) > 120: return False
 
-    def crawl(self, target=200):
-        print("=" * 80)
-        print("🥗 CRAWLER RESEP SEHAT - KOMPAS + TRIBUN")
-        print("=" * 80)
-        print("✨ SUMBER RESEP:")
-        print("  ✓ Kompas.com/tag/makanan-sehat, resep-sehat, diet-sehat")
-        print("  ✓ Tribunnews.com/resep-masakan (filter: sehat)")
-        print("=" * 80)
-        print(f"🎯 Target: {target} resep/tips sehat")
-        print("🥗 Filter: WAJIB ADA kata 'SEHAT' + keyword kesehatan")
-        print("=" * 80)
-        print("\n📋 KEYWORD KESEHATAN:")
-        print("  ✓ Sehat, menyehatkan, kesehatan")
-        print("  ✓ Diet, menurunkan berat badan, rendah kalori")
-        print("  ✓ Berkhasiat, bermanfaat, bergizi, nutrisi")
-        print("  ✓ Kolesterol, diabetes, darah tinggi, jantung")
-        print("  ✓ Detox, antioksidan, imun, daya tahan tubuh")
-        print("  ✓ Sembuh, mencegah penyakit, obat alami")
-        print("=" * 80)
-        
-        recipes = []
-        
-        sources = [
-            ("Kompas Sehat", self.get_links_kompas_sehat, self.scrape_kompas, 10),
-            ("Tribun Resep", self.get_links_tribun_resep, self.scrape_tribun, 15),
+        units = [
+            'gr', 'gram', 'kg', 'sdm', 'sdt', 'ml', 'liter', 'buah', 
+            'batang', 'lembar', 'potong', 'iris', 'secukupnya',
+            'sendok', 'cup', 'gelas', 'cangkir', 'sachet', 'bungkus',
+            'siung', 'cm', 'paket', 'ikat', 'genggam', 'ruas', 'rimpang', 
+            'jari', 'jempol', 'telunjuk', 'kencur', 'jahe', 'kunyit', 'butir'
         ]
         
-        for source_name, get_links, scrape_func, max_pages in sources:
-            if len(recipes) >= target:
-                break
+        has_unit = any(u in t_lower for u in units)
+        has_digit = any(c.isdigit() for c in text)
+        
+        if has_unit or has_digit:
+            return True
+        elif len(text) < 60 and ":" not in text:
+            if len(text.split()) > 6: return False
+            return True
             
-            print(f"\n{'='*80}")
-            print(f"🔗 SUMBER: {source_name}")
-            print(f"{'='*80}")
-            
-            links = get_links(max_pages=max_pages)
-            print(f"✅ Berhasil mengumpulkan {len(links)} link dari {source_name}")
-            
-            for idx, url in enumerate(links, 1):
-                if len(recipes) >= target:
-                    break
-                
-                print(f"\n[{source_name} - {idx}/{len(links)}] Memproses resep...")
-                print(f"   URL: {url[:75]}...")
-                
-                recipe = scrape_func(url)
-                if not recipe or not recipe["title"] or len(recipe["content"]) < 100:
-                    print("   ⚠️  Data tidak lengkap atau terlalu pendek")
+        return False
+
+    def extract_content_smart(self, soup):
+        content_div = soup.find("div", class_="read__content")
+        if not content_div: return "", [], []
+
+        description = ""
+        bahan = []
+        langkah = []
+
+        all_elements = content_div.find_all(['p', 'ul', 'ol', 'h2', 'h3', 'h4', 'strong', 'b', 'div'])
+        current_mode = "intro" 
+        
+        for elem in all_elements:
+            if elem.get('class'):
+                cls_str = " ".join(elem.get('class'))
+                if any(x in cls_str for x in ['ads', 'inner-link', 'video', 'box', 'photo']):
                     continue
-                
-                # Filter HANYA resep/tips SEHAT
-                if self.is_recipe_healthy(recipe["title"], recipe["content"]):
-                    recipes.append(recipe)
-                    print(f"   ✅ RESEP SEHAT #{len(recipes)}")
-                    print(f"   🥗 {recipe['title'][:70]}...")
+            
+            text = self.clean_text(elem.get_text())
+            if not text: continue
+            if any(bl in text.lower() for bl in self.content_blacklist): continue
+
+            # --- MODE SWITCHING ---
+            if self.is_header(text, self.bahan_header_keywords):
+                current_mode = "bahan"
+                continue
+            
+            if self.is_header(text, self.langkah_header_keywords):
+                current_mode = "langkah"
+                continue
+            
+            # --- EXTRACTION ---
+            if current_mode == "intro":
+                if not description and len(text) > 50 and elem.name == 'p':
+                    if ":" not in text[:15]: description = text
+            
+            elif current_mode == "bahan":
+                if self.is_step_numbered(text):
+                    current_mode = "langkah"
+                    langkah.append(self.clean_leading_number(text))
                 else:
-                    print("   ⏭️  Bukan konten sehat (tidak ada kata 'sehat'/keyword kesehatan)")
-                
-                time.sleep(1.5)
+                    items_to_add = []
+                    if elem.name in ['ul', 'ol']:
+                        items_to_add = [self.clean_text(li.get_text()) for li in elem.find_all('li')]
+                    elif elem.name in ['p', 'div']:
+                        items_to_add = [text]
+                    
+                    for item in items_to_add:
+                        if self.is_valid_ingredient(item):
+                            bahan.append(item)
+
+            elif current_mode == "langkah":
+                if elem.name == 'ol':
+                    items = [self.clean_leading_number(li.get_text()) for li in elem.find_all('li')]
+                    langkah.extend([i for i in items if i])
+                elif elem.name in ['p', 'div', 'li']:
+                    if self.is_step_numbered(text):
+                        langkah.append(self.clean_leading_number(text))
+
+        bahan = list(dict.fromkeys(bahan))
+        langkah = list(dict.fromkeys(langkah))
         
-        print(f"\n{'='*80}")
-        print("💾 MENYIMPAN HASIL...")
-        print(f"{'='*80}")
+        if not description and content_div.find('p'):
+            candidates = [p.get_text() for p in content_div.find_all('p') if len(p.get_text()) > 50]
+            if candidates: description = self.clean_text(candidates[0])
+
+        return description, bahan, langkah
+
+    def get_links_curated(self, page_limit=20):
+        # TAG KHUSUS KESEHATAN/PENYAKIT/METODE SEHAT (Bukan Bahan)
+        sources = [
+            # 1. Kategori DIET & NUTRISI
+            "https://www.kompas.com/tag/resep-diet",
+            "https://www.kompas.com/tag/resep-sehat",
+            "https://www.kompas.com/tag/makanan-sehat",
+            
+            # 2. Kategori PENYAKIT (Sehatan)
+            "https://www.kompas.com/tag/resep-diabetes",
+            "https://www.kompas.com/tag/resep-kolesterol",
+            "https://www.kompas.com/tag/resep-asam-urat",
+            "https://www.kompas.com/tag/resep-untuk-penderita-diabetes",
+            
+            # 3. Kategori METODE MASAK SEHAT
+            "https://www.kompas.com/tag/resep-kukus",
+            "https://www.kompas.com/tag/resep-pepes",
+            "https://www.kompas.com/tag/resep-tanpa-minyak",
+            "https://www.kompas.com/tag/resep-tanpa-santan",
+            "https://www.kompas.com/tag/resep-rebusan",
+            
+            # 4. Kategori VEGETARIAN/NABATI
+            "https://www.kompas.com/tag/resep-vegetarian",
+            "https://www.kompas.com/tag/resep-vegan",
+            
+            # 5. Kategori HERBAL/JAMU
+            "https://www.kompas.com/tag/jamu",
+            "https://www.kompas.com/tag/minuman-herbal",
+            "https://www.kompas.com/tag/wedang"
+        ]
         
-        filename = "resep_sehat.csv"
-        with open(filename, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=["No", "Judul Resep", "Tanggal", "Isi Resep", "URL Link", "URL Gambar"])
+        all_links = []
+        print("\n🔍 Mengumpulkan Link Resep SPESIFIK KESEHATAN (Tanpa Gorengan Biasa)...")
+        
+        for base_url in sources:
+            tag_name = base_url.split('/')[-1]
+            print(f"   📂 Scanning tag: {tag_name}...")
+            # Scan lebih dalam (20 halaman) karena filter kita sangat ketat
+            for i in range(1, 21): 
+                url = f"{base_url}?page={i}"
+                try:
+                    r = requests.get(url, headers=self.headers, timeout=8)
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    count = 0
+                    for a in soup.find_all("a", href=True):
+                        href = a['href']
+                        if "/food/read/" in href and href not in all_links:
+                            all_links.append(href)
+                            count += 1
+                except: pass
+        
+        random.shuffle(all_links)
+        return all_links
+
+    def scrape_url(self, url):
+        try:
+            if self.use_selenium and self.driver:
+                self.driver.get(url)
+                WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((By.CLASS_NAME, "read__content")))
+                page_source = self.driver.page_source
+                soup = BeautifulSoup(page_source, "html.parser")
+            else:
+                r = requests.get(url, headers=self.headers, timeout=15)
+                soup = BeautifulSoup(r.text, "html.parser")
+
+            title_elem = soup.find("h1", class_="read__title")
+            title = self.clean_text(title_elem.get_text()) if title_elem else "No Title"
+
+            # 1. CEK JUDUL DULU (Filter Paling Ketat)
+            if self.is_listicle_or_compilation(title):
+                print(f"   ⏭️  SKIP (Kumpulan/Promo): {title[:40]}...")
+                return None
+            
+            if not self.is_strictly_healthy(title):
+                print(f"   ⏭️  SKIP (Tidak Cukup Sehat): {title[:40]}...")
+                return None
+
+            date_elem = soup.find("div", class_="read__time")
+            date = self.format_date(self.clean_text(date_elem.get_text())) if date_elem else ""
+
+            img_elem = soup.find("meta", property="og:image")
+            img_url = img_elem['content'] if img_elem else ""
+
+            desc, bahan, langkah = self.extract_content_smart(soup)
+            
+            if len(bahan) < 2:
+                 print(f"   ⚠️  SKIP: Bahan terlalu sedikit ({len(bahan)})")
+                 return None
+
+            return {
+                "title": title, "date": date, "description": desc,
+                "url": url, "image": img_url, "bahan": bahan, "langkah": langkah
+            }
+
+        except Exception as e:
+            return None
+
+    def save_results(self, results):
+        csv_file = os.path.join(self.dataset_folder, "resep_sehat_strict.csv")
+        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "id", "type", "judul", "tanggal", "kategori", 
+                "deskripsi", "url_gambar", "url_link", "bahan", "langkah"
+            ])
             writer.writeheader()
-            for idx, r in enumerate(recipes, 1):
+            for i, r in enumerate(results, 1):
                 writer.writerow({
-                    "No": idx,
-                    "Judul Resep": r["title"],
-                    "Tanggal": r["date"],
-                    "Isi Resep": r["content"],
-                    "URL Link": r["url"],
-                    "URL Gambar": r["image_url"]
+                    "id": i, "type": "resep_sehat", "judul": r['title'],
+                    "tanggal": r['date'], "kategori": "resep_sehat", "deskripsi": r['description'],
+                    "url_gambar": r['image'], "url_link": r['url'],
+                    "bahan": " | ".join(r['bahan']), "langkah": " | ".join(r['langkah'])
                 })
         
-        print(f"\n✅ SELESAI!")
-        print(f"🥗 Total Resep/Tips Sehat: {len(recipes)}")
-        print(f"📁 File: {filename}")
-        print(f"{'='*80}")
-        
-        print("\n📈 STATISTIK PER SUMBER:")
-        for source_name, _, _, _ in sources:
-            count = sum(1 for r in recipes if any(x in r["url"].lower() for x in source_name.lower().split()))
-            print(f"   {source_name}: {count} resep")
-        
-        print(f"\n🥗 KATEGORI KESEHATAN:")
-        categories = {
-            "Diet & Penurunan BB": ["diet", "menurunkan", "langsing", "rendah kalori"],
-            "Anti Penyakit": ["kolesterol", "diabetes", "darah tinggi", "jantung", "stroke"],
-            "Detox & Antioksidan": ["detox", "antioksidan", "membersihkan"],
-            "Imun & Daya Tahan": ["imun", "imunitas", "daya tahan", "vitamin"],
-            "Organik & Alami": ["organik", "alami", "herbal", "natural"]
-        }
-        
-        for cat_name, keywords in categories.items():
-            count = sum(1 for r in recipes if any(kw in (r["title"] + " " + r["content"]).lower() for kw in keywords))
-            if count > 0:
-                print(f"   {cat_name}: {count} resep")
-        
-        print(f"{'='*80}")
+        json_file = os.path.join(self.dataset_folder, "resep_sehat_strict.json")
+        json_output = []
+        for idx, r in enumerate(results, 1):
+            json_output.append({
+                "id": idx, "type": "resep_sehat", "judul": r['title'],
+                "tanggal": r['date'], "kategori": "resep_sehat", "deskripsi": r['description'],
+                "url_gambar": r['image'], "url_link": r['url'],
+                "bahan": r['bahan'], "langkah": r['langkah']
+            })
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump(json_output, f, ensure_ascii=False, indent=2)
 
+        print(f"\n💾 Data tersimpan di folder '{self.dataset_folder}':")
+        print(f"   - {csv_file}")
+        print(f"   - {json_file}")
+
+    def run(self, target_count=150):
+        print("="*60)
+        print("🥗 CRAWLER RESEP Sehat & DIET (STRICT MODE)")
+        print("="*60)
+        
+        # Ambil link dari 15+ SUMBER TAG KESEHATAN (Page 1-20)
+        links = self.get_links_curated(page_limit=20) 
+        results = []
+        
+        print(f"\n🚀 Memproses {len(links)} Link Kandidat (Target: {target_count})...\n")
+        
+        for i, link in enumerate(links):
+            if len(results) >= target_count: break
+            
+            print(f"[{i+1}/{len(links)}] {link}")
+            data = self.scrape_url(link)
+            
+            if not data: continue
+            if len(data['langkah']) < 1:
+                print("   ⚠️  Skip: Langkah tidak valid")
+                continue
+
+            results.append(data)
+            print(f"   ✅ BERHASIL! {data['title'][:60]}...")
+            print(f"      🌿 {len(data['bahan'])} Bahan | 🍳 {len(data['langkah'])} Langkah")
+
+        self.save_results(results)
+        
+        if self.use_selenium and self.driver: 
+            self.driver.quit()
+        print("\n🎉 Selesai!")
 
 if __name__ == "__main__":
     crawler = ResepSehatCrawler()
-    crawler.crawl(target=200)
+    crawler.run(target_count=150)
