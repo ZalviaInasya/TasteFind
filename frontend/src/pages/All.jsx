@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import DetailModal from "../components/DetailModal";
 
 export default function All() {
   const [searchValue, setSearchValue] = useState("");
