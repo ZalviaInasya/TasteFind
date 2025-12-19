@@ -29,7 +29,7 @@ export default function All() {
         body: JSON.stringify({
           query: searchValue,
           category: "semua",
-          top_k: 5,
+          top_k: 10,
         }),
       });
 
@@ -68,11 +68,11 @@ export default function All() {
 
   // Separate results by scoring method
   const getTFIDFResults = () => {
-    return [...results].sort((a, b) => (b.tfidf_score || 0) - (a.tfidf_score || 0)).slice(0, 5);
+    return [...results].sort((a, b) => (b.tfidf_score || 0) - (a.tfidf_score || 0)).slice(0, 10);
   };
 
   const getSBERTResults = () => {
-    return [...results].sort((a, b) => (b.sbert_score || 0) - (a.sbert_score || 0)).slice(0, 5);
+    return [...results].sort((a, b) => (b.sbert_score || 0) - (a.sbert_score || 0)).slice(0, 10);
   };
 
   const getHybridResults = () => {
@@ -82,7 +82,7 @@ export default function All() {
         const bs = b.hybrid_score ?? ((b.tfidf_score || 0) + (b.sbert_score || 0)) / 2;
         return bs - as;
       })
-      .slice(0, 5);
+      .slice(0, 10);
   };
 
   const [scoreType, setScoreType] = useState("hybrid");

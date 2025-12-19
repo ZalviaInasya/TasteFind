@@ -50,7 +50,7 @@ def search_endpoint():
         data = request.json
         query = data.get("query", "")
         category = data.get("category", "semua")
-        top_k = data.get("top_k", 5)
+        top_k = int(data.get("top_k", 10))  # default to top 10 results
         
         if not query:
             return jsonify({
