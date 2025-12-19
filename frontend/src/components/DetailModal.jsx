@@ -10,9 +10,13 @@ export default function DetailModal({ open, onClose, item }) {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "auto";
+    };
   }, [onClose]);
 
+  // --- LOGIKA ASLI ---
   const getText = (keys) => {
     for (const k of keys) {
       if (k in item && item[k]) {
@@ -34,83 +38,105 @@ export default function DetailModal({ open, onClose, item }) {
 
   const renderList = (raw) => {
     if (!raw) return null;
-    if (Array.isArray(raw)) return raw.map((x, i) => <li key={i} className="mb-1">{x}</li>);
-    return raw.toString().split(/\r?\n|\||;|\./).filter(s=>s.trim()).map((s,i)=> <li key={i} className="mb-1">{s.trim()}</li>);
+    const items = Array.isArray(raw) ? raw : raw.toString().split(/\r?\n|\||;|\./).filter(s => s.trim());
+    return items.map((s, i) => (
+      <li key={i} className="flex gap-4 mb-4 items-start group">
+        <span className="mt-2.5 w-2 h-2 rounded-full bg-[#E4C590] flex-shrink-0 shadow-[0_0_10px_rgba(228,197,144,0.3)]"></span>
+        <span className="text-white/80 group-hover:text-white transition-colors text-lg leading-relaxed">{s.trim()}</span>
+      </li>
+    ));
   };
 
-  const isNews = (item["type"] || item["kategori"] || item["category"] || "").toString().toLowerCase().includes("berita") || (isiBerita && isiBerita.length>0);
+  const isNews = (item["type"] || item["kategori"] || item["category"] || "").toString().toLowerCase().includes("berita") || (isiBerita && isiBerita.length > 0);
+  const hybridScore = item["hybrid_score"] ?? (((item["tfidf_score"] || 0) + (item["sbert_score"] || 0)) / 2);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose}></div>
+    <div className={`fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-8 transition-all duration-700 ${animateIn ? "opacity-100" : "opacity-0"}`}>
+      <div className="absolute inset-0 bg-black/95 backdrop-blur-md" onClick={onClose}></div>
 
-      <div className="relative max-w-3xl w-full bg-[#6E4A3E]/8 backdrop-blur-md border border-[#6E4A3E]/20 rounded-2xl shadow-2xl max-h-[85vh] overflow-auto text-white">
-        {/* top-right close */}
-        <button onClick={onClose} aria-label="Tutup" className="absolute right-4 top-4 bg-white/6 hover:bg-white/10 text-white rounded-full w-9 h-9 flex items-center justify-center">✕</button>
+      {/* Kontainer Utama 7xl */}
+      <div className={`relative w-full max-w-7xl h-[90vh] bg-[#1A1614] rounded-[40px] shadow-[0_50px_100px_rgba(0,0,0,1)] border border-white/5 flex flex-col md:flex-row overflow-hidden transition-all duration-700 transform ${animateIn ? "translate-y-0 scale-100" : "translate-y-12 scale-95"}`}>
+        
+        <button onClick={onClose} className="absolute right-8 top-8 z-50 bg-white/5 hover:bg-white/10 text-white rounded-full w-14 h-14 flex items-center justify-center backdrop-blur-md border border-white/10 transition-all">
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
 
-        {/* TOP ROW: image left, meta + action right */}
-        <div className="flex flex-col md:flex-row items-start gap-4 p-6">
-          <div className="md:w-64 flex-shrink-0">
-            <div className="w-64 h-64 overflow-hidden rounded-lg">
-              <img src={image || "/images/placeholder.jpg"} alt={title || "image"} className="w-full h-full object-cover rounded-lg shadow-lg border border-[#6E4A3E]/20" />
-            </div>
-          </div>
-
-          <div className="flex-1 flex flex-col justify-start pl-4">
-            <h2 className="text-3xl md:text-4xl font-semibold leading-tight mb-2" style={{fontFamily: 'Poppins, serif', color: '#E4C590'}}>{title}</h2>
-
-            <div className="mb-4">
-              <span className="text-base font-semibold text-white/85">{date || "N/A"}</span>
-            </div>
-
-            <div className="flex items-center gap-3 mt-2 mb-4">
-              {item["tfidf_score"] !== undefined && (
-                <span className="text-xs md:text-sm bg-[#1E40AF]/20 border border-[#1E40AF]/30 text-white px-2 py-1 rounded-full font-semibold">TF-IDF: {(item["tfidf_score"]||0).toFixed(4)}</span>
-              )}
-
-              {item["sbert_score"] !== undefined && (
-                <span className="text-xs md:text-sm bg-[#065f46]/20 border border-[#065f46]/30 text-white px-2 py-1 rounded-full font-semibold">SBERT: {(item["sbert_score"]||0).toFixed(4)}</span>
-              )}
-
-            </div>
-          </div>
+        {/* IMAGE */}
+        <div className="md:w-1/2 relative h-80 md:h-full overflow-hidden">
+          <img src={image || "/images/placeholder.jpg"} alt={title} className="w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#1A1614] via-transparent md:bg-gradient-to-r md:from-transparent md:to-[#1A1614]"></div>
         </div>
 
-        {/* BOTTOM: description, bahan, langkah (full width under image) */}
-        <div className="border-t border-[#6E4A3E]/16 px-6 pb-6 pt-6 overflow-auto">
-          <div className="mb-6">
-            <h3 className="text-xl md:text-2xl font-semibold mb-3" style={{fontFamily: 'Poppins, serif', color: '#E4C590'}}>{isNews ? 'Isi Berita' : 'Deskripsi'}</h3>
-            <p className="text-base md:text-lg text-white/90 leading-relaxed" style={{textAlign: 'justify'}}>{isNews ? (isiBerita || "Tidak ada isi berita") : (deskripsi || "Tidak ada deskripsi")}</p>
-          </div>
+        {/* CONTENT */}
+        <div className="md:w-1/2 flex flex-col h-full bg-[#1A1614]">
+          <div className="flex-1 overflow-y-auto p-10 md:p-20 no-scrollbar">
+            
+            <header className="mb-12">
+              <h2 className="text-5xl md:text-6xl font-bold leading-[1.1] mb-6 tracking-tighter" style={{ color: '#E4C590', fontFamily: 'Poppins, serif' }}>
+                {title}
+              </h2>
+              <p className="text-white/40 text-base italic">{date || "TasteFind Premium Selection"}</p>
+            </header>
 
-          {!isNews && (
-            <div className="mb-6">
-              <h3 className="text-xl md:text-2xl font-semibold mb-3" style={{fontFamily: 'Poppins, serif', color: '#E4C590'}}>Bahan</h3>
-              <ul className="list-disc list-inside text-base md:text-lg leading-relaxed text-white/95" style={{textAlign: 'justify'}}>
-                {renderList(bahanRaw)}
-              </ul>
+            {/* DASHBOARD SKOR - Biasa aja tapi beda warna selaras */}
+            <div className="grid grid-cols-3 gap-6 mb-16">
+              
+              {/* HYBRID - Gold/Cream */}
+              <div className="p-5 rounded-[24px] border border-[#E4C590]/30 bg-[#E4C590]/5">
+                <p className="text-[10px] uppercase tracking-[0.2em] mb-2 font-black text-[#E4C590]/60">Hybrid Score</p>
+                <p className="text-2xl font-bold text-[#E4C590]">{hybridScore.toFixed(4)}</p>
+              </div>
+
+              {/* TF-IDF - Soft Blue/Silver */}
+              <div className="p-5 rounded-[24px] border border-blue-400/30 bg-blue-400/5">
+                <p className="text-[10px] uppercase tracking-[0.2em] mb-2 font-black text-blue-400/60">TF-IDF</p>
+                <p className="text-2xl font-bold text-blue-300">{(item["tfidf_score"] || 0).toFixed(4)}</p>
+              </div>
+
+              {/* SBERT - Soft Green */}
+              <div className="p-5 rounded-[24px] border border-green-400/30 bg-green-400/5">
+                <p className="text-[10px] uppercase tracking-[0.2em] mb-2 font-black text-green-400/60">SBERT</p>
+                <p className="text-2xl font-bold text-green-300">{(item["sbert_score"] || 0).toFixed(4)}</p>
+              </div>
+
             </div>
-          )}
 
-          {!isNews && (
-            <div className="mb-10">
-              <h3 className="text-xl md:text-2xl font-semibold mb-3" style={{fontFamily: 'Poppins, serif', color: '#E4C590'}}>Langkah</h3>
-              <ol className="list-decimal list-inside text-base md:text-lg leading-relaxed text-white/95" style={{textAlign: 'justify'}}>
-                {renderList(langkahRaw)}
-              </ol>
+            <div className="space-y-16">
+              <section>
+                <h3 className="text-sm uppercase tracking-[0.4em] text-[#E4C590] font-black mb-6">Deskripsi</h3>
+                <p className="text-white/80 leading-[1.8] text-xl italic" style={{ textAlign: 'justify', fontFamily: 'serif' }}>
+                  "{isNews ? isiBerita : (deskripsi || "Hidangan eksklusif yang diracik khusus untuk gaya hidup sehat Anda.")}"
+                </p>
+              </section>
+
+              {!isNews && (
+                <>
+                  <section>
+                    <h3 className="text-3xl font-bold text-white mb-8 tracking-tight">Bahan Utama</h3>
+                    <ul className="text-lg">{renderList(bahanRaw)}</ul>
+                  </section>
+                  <section>
+                    <h3 className="text-3xl font-bold text-white mb-8 tracking-tight">Langkah Pembuatan</h3>
+                    <ul className="text-lg">{renderList(langkahRaw)}</ul>
+                  </section>
+                </>
+              )}
             </div>
-          )}
 
-          <div className="flex justify-end">
-            <a href={link || "#"} target="_blank" rel="noopener noreferrer" aria-label="Baca Selengkapnya" className="inline-flex items-center gap-2 bg-gradient-to-r from-[#E4C590] to-[#d9b87d] text-[#3b2b1f] font-semibold px-4 py-2 rounded-full shadow-md hover:shadow-lg transform transition-all duration-200 hover:-translate-y-1 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-[#E4C590]/30">
-              <span>Baca Selengkapnya</span>
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14 3h7v7M10 14L21 3" />
-              </svg>
-            </a>
+            <footer className="mt-24 pt-10 border-t border-white/5 flex justify-end">
+              <a href={link || "#"} target="_blank" className="bg-[#E4C590] text-[#1A1614] font-black px-12 py-5 rounded-full text-sm uppercase tracking-widest shadow-lg">
+                Baca Selengkapnya
+              </a>
+            </footer>
+
           </div>
         </div>
       </div>
+
+      <style jsx global>{`
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
     </div>
   );
 }
